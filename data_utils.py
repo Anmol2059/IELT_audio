@@ -18,7 +18,7 @@ class Dataset_train(Dataset):
         return len(self.list_IDs)
     def __getitem__(self, index):
         utt_id = self.list_IDs[index]
-        X, fs = librosa.load(self.base_dir+'wav/'+utt_id+'.wav', sr=16000) 
+        X, fs = librosa.load(self.base_dir+'flac/'+utt_id+'.flac', sr=16000) 
         Y=process_Rawboost_feature(X, fs, self.args, self.algo)
         X_pad= pad(Y, self.cut)
         x_inp= Tensor(X_pad)
@@ -36,7 +36,7 @@ class Dataset_eval(Dataset):
         return len(self.list_IDs)
     def __getitem__(self, index):  
         utt_id = self.list_IDs[index]
-        X, fs = librosa.load(self.base_dir+'wav/'+utt_id+'.wav', sr=16000)
+        X, fs = librosa.load(self.base_dir+'flac/'+utt_id+'.flac', sr=16000)
         X_pad = pad(X,self.cut)
         x_inp = Tensor(X_pad)
         return x_inp, utt_id  

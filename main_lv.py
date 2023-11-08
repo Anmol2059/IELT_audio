@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 from data_utils_vl import Dataset_train, Dataset_eval
 from model import Model2
 from utils import read_metadata, my_collate, reproducibility
+from tqdm import tqdm
 
 def evaluate_accuracy(dev_loader, model, device):
     val_loss = 0.0
@@ -31,21 +32,10 @@ def evaluate_accuracy(dev_loader, model, device):
         
         batch_loss = criterion(batch_out, batch_y)
         val_loss += (batch_loss.item() * batch_size)
-
         i=i+1
-        print("batch %i of %i (Memory: %.2f of %.2f GiB reserved) (validation)"
-                  % (
-                     i,
-                     num_batch,
-                     torch.cuda.max_memory_allocated(device) / (2 ** 30),
-                     torch.cuda.max_memory_reserved(device) / (2 ** 30),
-                     ),
-                  end="\r",
-                  )
-        
     val_loss /= num_total
     test_accuracy = 100. * correct / len(dev_loader.dataset)
-    print('Test accuracy: ' +str(test_accuracy)+'%')
+    print('\n{} - {} - {} '.format(epoch, str(test_accuracy)+'%', val_loss))
     return val_loss
 
 
@@ -87,8 +77,10 @@ def train_epoch(train_loader, model, lr,optim, device):
     num_batch = len(train_loader)
     i=0
     
-    for batch_x, batch_y, _ in train_loader:
+    pbar = tqdm(train_loader)
+    for i, batch in enumerate(pbar):
       with torch.set_grad_enabled(True):
+        batch_x, batch_y, _ = batch
         batch_size = len(batch_x)
         batch_y = torch.LongTensor(batch_y)
         num_total += batch_size
@@ -102,22 +94,14 @@ def train_epoch(train_loader, model, lr,optim, device):
         optimizer.step()  
 
         i=i+1
-        print("batch %i of %i (Memory: %.2f of %.2f GiB reserved) (training)"
-                  % (
-                     i,
-                     num_batch,
-                     torch.cuda.max_memory_allocated(device) / (2 ** 30),
-                     torch.cuda.max_memory_reserved(device) / (2 ** 30),
-                     ),
-                  end="\r",
-                  )
+        pbar.set_description(f"Epoch {epoch}: cls_loss {batch_loss.item()}")
     sys.stdout.flush()
        
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Conformer-W2V Variable length')
     # Dataset
-    parser.add_argument('--database_path', type=str, default='datasets/', help='Change this to user\'s full directory address of LA database (ASVspoof2019- for training & development (used as validation), ASVspoof2021 for evaluation scores). We assume that all three ASVspoof 2019 LA train, LA dev and ASVspoof2021 LA eval data folders are in the same database_path directory.')
+    parser.add_argument('--database_path', type=str, default='ASVspoof_database/', help='Change this to user\'s full directory address of LA database (ASVspoof2019- for training & development (used as validation), ASVspoof2021 for evaluation scores). We assume that all three ASVspoof 2019 LA train, LA dev and ASVspoof2021 LA eval data folders are in the same database_path directory.')
     '''
     % database_path/
     %      |- ASVspoof2021_LA_eval/wav
@@ -126,7 +110,7 @@ if __name__ == '__main__':
     %      |- ASVspoof2021_DF_eval/wav
     '''
 
-    parser.add_argument('--protocols_path', type=str, default='database/', help='Change with path to user\'s LA database protocols directory address')
+    parser.add_argument('--protocols_path', type=str, default='ASVspoof_database/', help='Change with path to user\'s LA database protocols directory address')
     '''
     % protocols_path/
     %   |- ASVspoof_LA_cm_protocols
@@ -267,21 +251,21 @@ if __name__ == '__main__':
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,weight_decay=args.weight_decay)
    
     # define train dataloader
-    labels_trn, files_id_train = read_metadata( dir_meta =  os.path.join(args.protocols_path+'{}_cm_protocols/{}.cm.train.trn.txt'.format(prefix,prefix_2019)), is_eval=False)
+    labels_trn, files_id_train = read_metadata( dir_meta =  os.path.join(args.protocols_path+'LA/{}_cm_protocols/{}.cm.train.trn.txt'.format(prefix,prefix_2019)), is_eval=False)
     print('no. of training trials',len(files_id_train))
     
-    train_set=Dataset_train(args,list_IDs = files_id_train,labels = labels_trn,base_dir = os.path.join(args.database_path+'{}_{}_train/'.format(prefix_2019.split('.')[0],args.track)),algo=args.algo)
+    train_set=Dataset_train(args,list_IDs = files_id_train,labels = labels_trn,base_dir = os.path.join(args.database_path+'LA/{}_{}_train/'.format(prefix_2019.split('.')[0],args.track)),algo=args.algo)
     train_loader = DataLoader(train_set, batch_size=args.batch_size, num_workers = 10, shuffle=True,drop_last = True, collate_fn=my_collate)
     
     del train_set,labels_trn
     
     # define validation dataloader
-    labels_dev,files_id_dev = read_metadata( dir_meta =  os.path.join(args.protocols_path+'{}_cm_protocols/{}.cm.dev.trl.txt'.format(prefix,prefix_2019)), is_eval=False)
+    labels_dev,files_id_dev = read_metadata( dir_meta =  os.path.join(args.protocols_path+'LA/{}_cm_protocols/{}.cm.dev.trl.txt'.format(prefix,prefix_2019)), is_eval=False)
     print('no. of validation trials',len(files_id_dev))
 
     dev_set = Dataset_train(args,list_IDs = files_id_dev,
 		    labels = labels_dev,
-		    base_dir = os.path.join(args.database_path+'{}_{}_dev/'.format(prefix_2019.split('.')[0],args.track)), algo=args.algo)
+		    base_dir = os.path.join(args.database_path+'LA/{}_{}_dev/'.format(prefix_2019.split('.')[0],args.track)), algo=args.algo)
 
     dev_loader = DataLoader(dev_set, batch_size=8, num_workers=10, shuffle=False, collate_fn=my_collate)
     del dev_set,labels_dev
@@ -354,9 +338,9 @@ if __name__ == '__main__':
             prefix_2019 = 'ASVspoof2019.{}'.format(tracks)
             prefix_2021 = 'ASVspoof2021.{}'.format(tracks)
 
-            file_eval = read_metadata( dir_meta =  os.path.join(args.protocols_path+'{}_cm_protocols/{}.cm.eval.trl.txt'.format(prefix,prefix_2021)), is_eval=True)
+            file_eval = read_metadata( dir_meta =  os.path.join(args.protocols_path+'{}/{}_cm_protocols/{}.cm.eval.trl.txt'.format(tracks,prefix,prefix_2021)), is_eval=True)
             print('no. of eval trials',len(file_eval))
-            eval_set=Dataset_eval(list_IDs = file_eval,base_dir = os.path.join(args.database_path+'ASVspoof2021_{}_eval/'.format(tracks)),track=tracks)
+            eval_set=Dataset_eval(list_IDs = file_eval,base_dir = os.path.join(args.database_path+'{}/ASVspoof2021_{}_eval/'.format(tracks,tracks)),track=tracks)
             produce_evaluation_file(eval_set, model, device, 'Scores/{}/{}.txt'.format(tracks,model_tag))
         
         else:

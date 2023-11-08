@@ -37,7 +37,7 @@ def produce_evaluation_file(dataset, model, device, save_path):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Conformer-W2V eval variable length')
     # Dataset
-    parser.add_argument('--database_path', type=str, default='datasets/', help='Change this to user\'s full directory address of LA database (ASVspoof2019- for training & development (used as validation), ASVspoof2021 for evaluation scores). We assume that all three ASVspoof 2019 LA train, LA dev and ASVspoof2021 LA eval data folders are in the same database_path directory.')
+    parser.add_argument('--database_path', type=str, default='ASVspoof_database/', help='Change this to user\'s full directory address of LA database (ASVspoof2019- for training & development (used as validation), ASVspoof2021 for evaluation scores). We assume that all three ASVspoof 2019 LA train, LA dev and ASVspoof2021 LA eval data folders are in the same database_path directory.')
     '''
    % database_path/
     %      |- ASVspoof2021_LA_eval/wav
@@ -46,7 +46,7 @@ if __name__ == '__main__':
     %      |- ASVspoof2021_DF_eval/wav
     '''
 
-    parser.add_argument('--protocols_path', type=str, default='database/', help='Change with path to user\'s LA database protocols directory address')
+    parser.add_argument('--protocols_path', type=str, default='ASVspoof_database/', help='Change with path to user\'s LA database protocols directory address')
     '''
     % protocols_path/
     %   |- ASVspoof_LA_cm_protocols
@@ -210,9 +210,9 @@ if __name__ == '__main__':
         prefix_2019 = 'ASVspoof2019.{}'.format(tracks)
         prefix_2021 = 'ASVspoof2021.{}'.format(tracks)
 
-        file_eval = read_metadata( dir_meta =  os.path.join(args.protocols_path+'{}_cm_protocols/{}.cm.eval.trl.txt'.format(prefix,prefix_2021)), is_eval=True)
+        file_eval = read_metadata( dir_meta =  os.path.join(args.protocols_path+'{}/{}_cm_protocols/{}.cm.eval.trl.txt'.format(tracks,prefix,prefix_2021)), is_eval=True)
         print('no. of eval trials',len(file_eval))
-        eval_set=Dataset_eval(list_IDs = file_eval,base_dir = os.path.join(args.database_path+'ASVspoof2021_{}_eval/'.format(tracks)),track=tracks)
+        eval_set=Dataset_eval(list_IDs = file_eval,base_dir = os.path.join(args.database_path+'{}/ASVspoof2021_{}_eval/'.format(tracks,tracks)),track=tracks)
         produce_evaluation_file(eval_set, model, device, 'Scores/{}/{}.txt'.format(tracks,model_tag))
       else:
             print('Score file already exists')
