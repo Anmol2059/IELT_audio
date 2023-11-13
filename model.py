@@ -22,7 +22,7 @@ class MyConformer(nn.Module):
   def forward(self, x, device): # x shape [bs, tiempo, frecuencia]
     x = torch.stack([torch.vstack((self.class_token, x[i])) for i in range(len(x))])#[bs,1+tiempo,emb_size]
     for layer in self.encoder_blocks:
-            x = layer(x) #[bs,1+tiempo,emb_size]
+            x, attn_weight = layer(x) #[bs,1+tiempo,emb_size]
     embedding=x[:,0,:] #[bs, emb_size]
     out=self.fc5(embedding) #[bs,2]
     return out, embedding
