@@ -27,7 +27,7 @@ def evaluate_accuracy(dev_loader, model, device):
         num_total += batch_size
         batch_x = batch_x.to(device)
         batch_y = batch_y.view(-1).type(torch.int64).to(device)
-        batch_out = model(batch_x)
+        batch_out, _ = model(batch_x)
         pred = batch_out.max(1)[1] 
         correct += pred.eq(target).sum().item()
         
@@ -86,7 +86,7 @@ def train_epoch(train_loader, model, lr,optim, device):
         
         batch_x = batch_x.to(device)
         batch_y = batch_y.view(-1).type(torch.int64).to(device)
-        batch_out = model(batch_x)
+        batch_out, _ = model(batch_x)
         batch_loss = criterion(batch_out, batch_y)     
         pbar.set_description(f"Epoch {epoch}: cls_loss {batch_loss.item()}")
         optimizer.zero_grad()

@@ -21,11 +21,13 @@ class MyConformer(nn.Module):
 
   def forward(self, x, device): # x shape [bs, tiempo, frecuencia]
     x = torch.stack([torch.vstack((self.class_token, x[i])) for i in range(len(x))])#[bs,1+tiempo,emb_size]
+    list_attn_weight = []
     for layer in self.encoder_blocks:
             x, attn_weight = layer(x) #[bs,1+tiempo,emb_size]
+            list_attn_weight.append(attn_weight)
     embedding=x[:,0,:] #[bs, emb_size]
     out=self.fc5(embedding) #[bs,2]
-    return out, embedding
+    return out, list_attn_weight
 
 class SSLModel(nn.Module): #W2V
     def __init__(self,device):
@@ -76,8 +78,8 @@ class Model(nn.Module):
         x = self.first_bn(x)
         x = self.selu(x)
         x = x.squeeze(dim=1)
-        out, _ =self.conformer(x,self.device)
-        return out
+        out, attn_score =self.conformer(x,self.device)
+        return out, attn_score
 
 class Model2(nn.Module): #Variable len
     def __init__(self, args, device):

@@ -3,3 +3,5 @@
 /fairseq-a/
 *__pycache__
 /xlsr2_300m.pt
+*.txt
+*.output
