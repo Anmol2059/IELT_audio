@@ -83,7 +83,7 @@ class Attention(nn.Module):
         self.to_out = nn.Linear(inner_dim, dim)
 
         self.max_pos_emb = max_pos_emb
-        self.rel_pos_emb = nn.Embedding(2 * max_pos_emb + 1, dim_head)
+        # self.rel_pos_emb = nn.Embedding(2 * max_pos_emb + 1, dim_head)
 
         self.dropout = nn.Dropout(dropout)
 
@@ -104,12 +104,12 @@ class Attention(nn.Module):
 
         # shaw's relative positional embedding
 
-        seq = torch.arange(n, device = device)
-        dist = rearrange(seq, 'i -> i ()') - rearrange(seq, 'j -> () j')
-        dist = dist.clamp(-max_pos_emb, max_pos_emb) + max_pos_emb
-        rel_pos_emb = self.rel_pos_emb(dist).to(q)
-        pos_attn = einsum('b h n d, n r d -> b h n r', q, rel_pos_emb) * self.scale
-        dots = dots + pos_attn
+        # seq = torch.arange(n, device = device)
+        # dist = rearrange(seq, 'i -> i ()') - rearrange(seq, 'j -> () j')
+        # dist = dist.clamp(-max_pos_emb, max_pos_emb) + max_pos_emb
+        # rel_pos_emb = self.rel_pos_emb(dist).to(q)
+        # pos_attn = einsum('b h n d, n r d -> b h n r', q, rel_pos_emb) * self.scale
+        # dots = dots + pos_attn
 
         if exists(mask) or exists(context_mask):
             mask = default(mask, lambda: torch.ones(*x.shape[:2], device = device))
