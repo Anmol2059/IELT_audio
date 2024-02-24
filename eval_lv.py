@@ -13,23 +13,30 @@ def produce_evaluation_file(dataset, model, device, save_path):
     model.eval()
     f=open(save_path,'w')
     f.close()
-    
+
+    fname_list = []
+    score_list = []
+    text_list = []
+
     for batch_x,_,utt_id in data_loader:
-        fname_list = []
-        score_list = []  
-        
         batch_out = model(batch_x)
-        
         batch_score = (batch_out[:, 1]  
                        ).data.cpu().numpy().ravel() 
         # add outputs
         fname_list.extend(utt_id)
         score_list.extend(batch_score.tolist())
         
-        with open(save_path, 'a+') as fh:
-            for f, cm in zip(fname_list,score_list):
-                fh.write('{} {}\n'.format(f, cm))
-        fh.close()   
+    for f, cm in zip(fname_list, score_list):
+        text_list.append('{} {}'.format(f, cm))
+    del fname_list
+    del score_list
+    with open(save_path, 'a+') as fh:
+        for i in range(0, len(text_list), 500):
+            batch = text_list[i:i+500]
+            fh.write('\n'.join(batch) + '\n')
+    del text_list
+    fh.close()
+
     print('Scores saved to {}'.format(save_path))
 
        
