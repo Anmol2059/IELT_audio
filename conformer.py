@@ -170,7 +170,7 @@ class Attention(nn.Module):
         
         # merge head tokens into cls token
         cls, patch, ht = torch.split(x, [1, N-1, self.num_heads], dim=1)
-        cls = cls + torch.mean(ht, dim=1, keepdim=True)
+        cls = cls + torch.mean(ht, dim=1, keepdim=True) + torch.mean(patch, dim=1, keepdim=True)
         x = torch.cat([cls, patch], dim=1)
 
         x = self.proj_drop(x)
