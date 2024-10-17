@@ -110,58 +110,62 @@ class InterEnsembleLearningTransformer(nn.Module):
 						if uname == '12':
 							uname = '11'
 						unit.load_from(weights, n_block=uname)
-      
 class MultiHeadVoting(nn.Module):
-	def __init__(self, config, vote_perhead=24, fix=True):
-		super(MultiHeadVoting, self).__init__()
-		self.fix = fix
-		self.num_heads = config.num_heads
-		self.vote_perhead = vote_perhead
+    def __init__(self, config, vote_perhead=24, fix=True):
+        super(MultiHeadVoting, self).__init__()
+        self.fix = fix
+        self.num_heads = config.num_heads
+        self.vote_perhead = vote_perhead
 
-        # anmol changed 3
-		# if self.fix:
-		# 	self.kernel = torch.tensor([[1, 2, 1],
-		# 	                            [2, 4, 2],
-		# 	                            [1, 2, 1]], device='cuda').unsqueeze(0).unsqueeze(0).half()
-		# 	self.conv = F.conv2d
-		# else:
-		# 	self.conv = nn.Conv2d(1, 1, 3, 1, 1)
-		if self.fix:
-			self.kernel = torch.tensor([1, 2, 1], device='cuda').unsqueeze(0).unsqueeze(0).half()
-		else:
-			self.kernel = torch.ones(1, 1, 3, device='cuda').half()
+        if self.fix:
+            self.kernel = torch.tensor([[1, 2, 1],
+                                        [2, 4, 2],
+                                        [1, 2, 1]], device='cuda').unsqueeze(0).unsqueeze(0).half()
+            self.conv = F.conv2d  
+        else:
+            self.conv = nn.Conv2d(1, 1, 3, 1, 1)
 
-	def forward(self, x, select_num=None, last=False):
-        # anmol changed 4
-		B, seq_len = x.shape[0], x.shape[1]  # Adapt for sequence length
-		select_num = self.vote_perhead if select_num is None else select_num
-		count = torch.zeros((B, seq_len), dtype=torch.int, device='cuda').half()
-    # anmol changed 5
-		score = x[:, :, 0]  # Removed spatial dimension handling for audio
-		_, select = torch.topk(score, self.vote_perhead, dim=-1)
-		select = select.reshape(B, -1)
+    def forward(self, x, select_num=None, last=False):
+        B, seq_len = x.shape[0], x.shape[1]  # Adapt for sequence length
+        select_num = self.vote_perhead if select_num is None else select_num
+        count = torch.zeros((B, seq_len), dtype=torch.int, device='cuda').half()
 
-		for i, b in enumerate(select):
-			# count[i, :] += torch.bincount(b, minlength=seq_len)
-            # anmol changed 6
-			bincount_result = torch.bincount(b, minlength=seq_len)
-			count[i, :seq_len] += bincount_result[:seq_len]
+        score = x[:, :, 0]  # Removed spatial dimension handling for audio
+        _, select = torch.topk(score, self.vote_perhead, dim=-1)
+        select = select.reshape(B, -1)
 
-		if not last:
-			count = self.enhace_local(count)
+        for i, b in enumerate(select):
+            bincount_result = torch.bincount(b, minlength=seq_len)
+            count[i, :seq_len] += bincount_result[:seq_len]
 
-		patch_value, patch_idx = torch.sort(count, dim=-1, descending=True)
-		patch_idx += 1
-		return patch_idx[:, :select_num], count
+        if not last:
+            count = self.enhace_local(count)
 
-	def enhace_local(self, count):
-        # anmol changed 7
-		B, seq_len = count.shape[0], count.shape[1]
-		if self.fix:
-			count = F.conv1d(count.unsqueeze(1), self.kernel, stride=1, padding=1).reshape(B, -1)
-		else:
-			count = F.conv1d(count.unsqueeze(1), self.kernel, stride=1, padding=1).reshape(B, -1)
-		return count
+        patch_value, patch_idx = torch.sort(count, dim=-1, descending=True)
+        patch_idx += 1
+        return patch_idx[:, :select_num], count
+
+    def enhace_local(self, count):
+        B, total_length = count.shape[0], count.shape[1]
+        H = int(np.sqrt(total_length))
+
+        
+        if H * H == total_length:
+            count = count.reshape(B, 1, H, H)  # Reshape for 2D convolution
+            if self.fix:
+                count = self.conv(count, self.kernel, stride=1, padding=1).reshape(B, -1)
+            else:
+                count = self.conv(count).reshape(B, -1)
+        else:
+            # Use conv1d when total_length doesn't form a perfect square
+            kernel_1d = self.kernel.view(1, 1, -1)  l
+            count = F.conv1d(count.unsqueeze(1), kernel_1d, stride=1, padding=1).reshape(B, -1)
+        
+        return count
+
+
+
+
 
 
 class IELTEncoder(nn.Module):
