@@ -12,7 +12,7 @@ def sinusoidal_embedding(n_channels, dim):
     pe[:, 1::2] = torch.cos(pe[:, 1::2])
     return pe.unsqueeze(0)
 
-class MyConformer(nn.Module):
+class MyConformer(nn.Module): #TODO: test this class with dummy input
   def __init__(self, emb_size=128, heads=4, ffmult=4, exp_fac=2, kernel_size=16, n_encoders=1):
     super(MyConformer, self).__init__()
     self.dim_head=int(emb_size/heads)
@@ -25,7 +25,10 @@ class MyConformer(nn.Module):
     self.encoder_blocks=_get_clones( ConformerBlock( dim = emb_size, dim_head=self.dim_head, heads= heads, 
     ff_mult = ffmult, conv_expansion_factor = exp_fac, conv_kernel_size = kernel_size),
     n_encoders)
+    #TODO: add MHVT module
+    #TODO: add CrossLayerRefinement
     self.class_token = nn.Parameter(torch.rand(1, emb_size))
+    
     self.fc5 = nn.Linear(emb_size, 2)
 
   def forward(self, x, device): # x shape [bs, tiempo, frecuencia]
@@ -80,6 +83,7 @@ class Model(nn.Module):
         self.selu = nn.SELU(inplace=True)
         self.conformer=MyConformer(emb_size=args.emb_size, n_encoders=args.num_encoders,
         heads=args.heads, kernel_size=args.kernel_size)
+         
     def forward(self, x):
         #-------pre-trained Wav2vec model fine tunning ------------------------##
         x_ssl_feat = self.ssl_model.extract_feat(x.squeeze(-1))
@@ -89,4 +93,5 @@ class Model(nn.Module):
         x = self.selu(x)
         x = x.squeeze(dim=1)
         out, attn_score =self.conformer(x,self.device)
+        #TODO: add Logit Assist, can add the loss inside here bz need for computing logit assist 
         return out, attn_score
