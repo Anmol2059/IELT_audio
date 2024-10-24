@@ -46,7 +46,7 @@ class InterEnsembleLearningTransformer(nn.Module):
 		else:
 			part_logits = self.head(x)
 
-		if self.assess:
+		if self.assess: # remove assess branch 
 			return part_logits, assess_list
 
 		elif test_mode:
@@ -58,7 +58,7 @@ class InterEnsembleLearningTransformer(nn.Module):
 			else:
 				loss_fct = LabelSmoothing(self.smooth_value)
 
-			if self.cam:
+			if self.cam: # keep this condition & include the loss inside Conformer model 
 				loss_p = loss_fct(part_logits.view(-1, self.num_classes), labels.view(-1))
 				loss_c = loss_fct(complement_logits.view(-1, self.num_classes), labels.view(-1))
 				alpha = self.loss_alpha
@@ -155,12 +155,12 @@ class CrossLayerRefinement(nn.Module):
 		return out, weights
 
 
-class IELTEncoder(nn.Module):
+class IELTEncoder(nn.Module): # same level with MyConformer class 
 	def __init__(self, config, update_warm=500, vote_perhead=24, dataset='cub',
 	             cam=True, dsm=True, fix=True, total_num=126, assess=False):
 		super(IELTEncoder, self).__init__()
 		self.assess = assess
-		self.warm_steps = update_warm
+		self.warm_steps = update_warm # remove this warm 
 		self.layer = nn.ModuleList()
 		self.layer_num = config.num_layers
 		self.vote_perhead = vote_perhead
@@ -171,7 +171,7 @@ class IELTEncoder(nn.Module):
 		for _ in range(self.layer_num - 1):
 			self.layer.append(Block(config, assess=self.assess))
 
-		if self.dataset == 'dog' or self.dataset == 'nabrids':
+		if self.dataset == 'dog' or self.dataset == 'nabrids': # remove this condition 
 			self.layer.append(Block(config, assess=self.assess))
 			self.clr_layer = self.layer[-1]
 			if self.cam:
@@ -189,7 +189,7 @@ class IELTEncoder(nn.Module):
 
 		self.total_num = total_num
 		## for CUB and NABirds
-		self.select_rate = torch.tensor([16, 14, 12, 10, 8, 6, 8, 10, 12, 14, 16], device='cuda') / self.total_num
+		self.select_rate = torch.tensor([16, 14, 12, 10, 8, 6, 8, 10, 12, 14, 16], device='cuda') / self.total_num # make the list of rate equal to number of Conformer encoder 
 		## for Others
 		# self.select_rate = torch.ones(self.layer_num-1,device='cuda')/(self.layer_num-1)
 
