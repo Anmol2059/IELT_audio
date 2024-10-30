@@ -32,10 +32,10 @@ class InterEnsembleLearningTransformer(nn.Module):
 		test_mode = False if labels is not None else True
         # anmol changed 2
 		x = self.embeddings(x).last_hidden_state
-		if self.assess:
-			x, xc, assess_list = self.encoder(x, test_mode)
-		else:
-			x, xc = self.encoder(x, test_mode)
+		# if self.assess:
+		# 	x, xc, assess_list = self.encoder(x, test_mode)
+		# else:
+		x, xc = self.encoder(x, test_mode)
 
 		if self.cam:
 			complement_logits = self.head(xc)
@@ -46,10 +46,10 @@ class InterEnsembleLearningTransformer(nn.Module):
 		else:
 			part_logits = self.head(x)
 
-		if self.assess: # remove assess branch 
-			return part_logits, assess_list
+		# if self.assess: # remove assess branch 
+		# 	return part_logits, assess_list
 
-		elif test_mode:
+		if test_mode:
 			return part_logits
 
 		else:
@@ -155,98 +155,70 @@ class CrossLayerRefinement(nn.Module):
 		return out, weights
 
 
-class IELTEncoder(nn.Module): # same level with MyConformer class 
-	def __init__(self, config, update_warm=500, vote_perhead=24, dataset='cub',
-	             cam=True, dsm=True, fix=True, total_num=126, assess=False):
-		super(IELTEncoder, self).__init__()
-		self.assess = assess
-		self.warm_steps = update_warm # remove this warm 
-		self.layer = nn.ModuleList()
-		self.layer_num = config.num_layers
-		self.vote_perhead = vote_perhead
-		self.dataset = dataset
-		self.cam = cam
-		self.dsm = dsm
+class IELTEncoder(nn.Module):
+    def __init__(self, config, update_warm=500, vote_perhead=24, cam=True, dsm=True, fix=True, total_num=126, assess=False):
+        super(IELTEncoder, self).__init__()
+        self.assess = assess
+        self.layer = nn.ModuleList()
+        self.layer_num = config.num_layers
+        self.vote_perhead = vote_perhead
+        self.cam = cam
+        self.dsm = dsm
 
-		for _ in range(self.layer_num - 1):
-			self.layer.append(Block(config, assess=self.assess))
+        for _ in range(self.layer_num - 1):
+            self.layer.append(Block(config, assess=self.assess))
 
-		if self.dataset == 'dog' or self.dataset == 'nabrids': # remove this condition 
-			self.layer.append(Block(config, assess=self.assess))
-			self.clr_layer = self.layer[-1]
-			if self.cam:
-				self.layer.append(Block(config, assess=self.assess))
-				self.key_layer = self.layer[-1]
-		else:
-			self.clr_layer = Block(config)
-			if self.cam:
-				self.key_layer = Block(config)
+        self.clr_layer = Block(config)  # Removed dataset condition
+        if self.cam:
+            self.key_layer = Block(config)
+            self.key_norm = LayerNorm(config.hidden_size, eps=1e-6)
 
-		if self.cam:
-			self.key_norm = LayerNorm(config.hidden_size, eps=1e-6)
+        self.patch_select = MultiHeadVoting(config, self.vote_perhead, fix)
+        self.total_num = total_num
+        self.select_rate = torch.tensor([16, 14, 12, 10, 8, 6, 8, 10, 12, 14, 16], device='cuda') / self.total_num
+        self.select_num = self.select_rate * self.total_num
+        self.clr_encoder = CrossLayerRefinement(config, self.clr_layer)
+        self.count = 0
 
-		self.patch_select = MultiHeadVoting(config, self.vote_perhead, fix)
+    def forward(self, hidden_states, test_mode=False):
+        if not test_mode:
+            self.count += 1
+        B, N, C = hidden_states.shape
+        complements = [[] for _ in range(B)]
+        class_token_list = []
 
-		self.total_num = total_num
-		## for CUB and NABirds
-		self.select_rate = torch.tensor([16, 14, 12, 10, 8, 6, 8, 10, 12, 14, 16], device='cuda') / self.total_num # make the list of rate equal to number of Conformer encoder 
-		## for Others
-		# self.select_rate = torch.ones(self.layer_num-1,device='cuda')/(self.layer_num-1)
+        for t in range(self.layer_num - 1):
+            layer = self.layer[t]
+            select_num = torch.round(self.select_num[t]).int()
+            hidden_states, weights = layer(hidden_states)
+            select_idx, select_score = self.patch_select(weights, select_num)
+            for i in range(B):
+                complements[i].extend(hidden_states[i, select_idx[i, :]])
+            class_token_list.append(hidden_states[:, 0].unsqueeze(1))
 
-		self.select_num = self.select_rate * self.total_num
-		self.clr_encoder = CrossLayerRefinement(config, self.clr_layer)
-		self.count = 0
+        cls_token = hidden_states[:, 0].unsqueeze(1)
+        clr, weights = self.clr_encoder(complements, cls_token)
+        sort_idx, _ = self.patch_select(weights, select_num=24, last=True)
 
-	def forward(self, hidden_states, test_mode=False):
-		if not test_mode:
-			self.count += 1
-		B, N, C = hidden_states.shape
-		complements = [[] for i in range(B)]
-		class_token_list = []
-		if self.assess:
-			layer_weights = []
-			layer_selected = []
-			layer_score = []
+        if not test_mode and self.count >= self.warm_steps and self.dsm:
+            layer_count = self.count_patch(sort_idx)
+            self.update_layer_select(layer_count)
 
-		for t in range(self.layer_num - 1):
-			layer = self.layer[t]
-			select_num = torch.round(self.select_num[t]).int()
-			hidden_states, weights = layer(hidden_states)
-			select_idx, select_score = self.patch_select(weights, select_num)
-			for i in range(B):
-				complements[i].extend(hidden_states[i, select_idx[i, :]])
-			class_token_list.append(hidden_states[:, 0].unsqueeze(1))
-			if self.assess:
-				layer_weights.append(weights)
-				layer_score.append(select_score)
-				layer_selected.extend(select_idx)
-		cls_token = hidden_states[:, 0].unsqueeze(1)
+        class_token_list = torch.cat(class_token_list, dim=1)
 
-		clr, weights = self.clr_encoder(complements, cls_token)
-		sort_idx, _ = self.patch_select(weights, select_num=24, last=True)
+        if not self.cam:
+            return clr[:, 0], None
+        else:
+            out = []
+            for i in range(B):
+                out.append(clr[i, sort_idx[i, :]])
+            out = torch.stack(out).squeeze(1)
+            out = torch.cat((cls_token, out), dim=1)
+            out, _ = self.key_layer(out)
+            key = self.key_norm(out)
 
-		if not test_mode and self.count >= self.warm_steps and self.dsm:
-			layer_count = self.count_patch(sort_idx)
-			self.update_layer_select(layer_count)
+        return key[:, 0], clr[:, 0]  # Removed assess_list return
 
-		class_token_list = torch.cat(class_token_list, dim=1)
-
-		if not self.cam:
-			return clr[:, 0], None
-		else:
-			out = []
-			for i in range(B):
-				out.append(clr[i, sort_idx[i, :]])
-			out = torch.stack(out).squeeze(1)
-			out = torch.cat((cls_token, out), dim=1)
-			out, _ = self.key_layer(out)
-			key = self.key_norm(out)
-
-		if self.assess:
-			assess_list = [layer_weights, layer_selected, layer_score, sort_idx]
-			return key[:, 0], clr[:, 0], assess_list
-		else:
-			return key[:, 0], clr[:, 0]
 
 # !pip install ml-collections
 if __name__ == '__main__':
