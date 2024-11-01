@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 from einops import rearrange
 from einops.layers.torch import Rearrange
-
+import numpy as np
 # helper functions
 
 def exists(val):
@@ -175,7 +175,7 @@ class Attention(nn.Module):
 
         x = self.proj_drop(x)
 
-        return x, attn
+        return x, attn[:, :, :N, :N]
 
 
 class FeedForward(nn.Module):
@@ -227,6 +227,60 @@ class ConformerConvModule(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+
+class MultiHeadVoting(nn.Module):
+        def __init__(self, num_heads, vote_perhead=8, fix=True):
+                super(MultiHeadVoting, self).__init__()
+                self.fix = fix
+                self.num_heads = num_heads
+                self.vote_perhead = vote_perhead
+
+                if self.fix:
+                        self.kernel = torch.tensor([1, 2, 1], device='cuda').unsqueeze(0).unsqueeze(0).half()
+                        self.conv = F.conv1d
+                else:
+                        self.conv = nn.Conv1d(1, 1, 3, 1, 1)
+
+        def forward(self, x, select_num=None, last=False):
+            B, patch_num = x.shape[0], x.shape[3] - 1
+            select_num = self.vote_perhead if select_num is None else select_num
+            count = torch.zeros((B, patch_num), dtype=torch.int, device='cuda').half()
+            score = x[:, :, 0, 1:]
+            _, select = torch.topk(score, self.vote_perhead, dim=-1)
+            select = select.reshape(B, -1)
+
+            for i, b in enumerate(select):
+                count[i, :] += torch.bincount(b, minlength=patch_num).to(count.device)
+            if not last:
+                count = self.enhace_local(count)
+                pass
+
+            patch_value, patch_idx = torch.sort(count, dim=-1, descending=True)
+            patch_idx += 1
+            return patch_idx[:, :select_num], count
+
+        def enhace_local(self, count):
+            B, T = count.shape[0], math.ceil(math.sqrt(count.shape[1]))
+            if self.fix:
+                count = self.conv(count.unsqueeze(1), self.kernel, stride=1, padding=1).reshape(B, -1)
+            else:
+                count = self.conv(count.unsqueeze(1)).reshape(B, -1)
+            return count
+
+class CrossLayerRefinement(nn.Module):
+        def __init__(self, hidden_size, clr_layer):
+                super(CrossLayerRefinement, self).__init__()
+                self.clr_layer = clr_layer
+                self.clr_norm = nn.LayerNorm(hidden_size, eps=1e-6)
+
+        def forward(self, x, cls):
+                out = [torch.stack(token) for token in x]
+                out = torch.stack(out).squeeze(1)
+                out = torch.cat((cls, out), dim=1)
+                out, weights = self.clr_layer(out)
+                out = self.clr_norm(out)
+                return out, weights
+
 # Conformer Block
 
 class ConformerBlock(nn.Module):
@@ -267,17 +321,18 @@ class ConformerBlock(nn.Module):
 
 # Conformer
 
-class Conformer(nn.Module):
+class IELTEncoder(nn.Module):
     def __init__(
         self,
         dim,
-        *,
         depth,
+        cam=True,
         dim_head = 64,
         heads = 8,
         ff_mult = 4,
         conv_expansion_factor = 2,
         conv_kernel_size = 31,
+        vote_perhead=8,
         attn_dropout = 0.,
         ff_dropout = 0.,
         conv_dropout = 0.,
@@ -285,6 +340,7 @@ class Conformer(nn.Module):
     ):
         super().__init__()
         self.dim = dim
+        self.cam = cam
         self.layers = nn.ModuleList([])
 
         for _ in range(depth):
@@ -299,9 +355,49 @@ class Conformer(nn.Module):
 
             ))
 
+        self.clr_layer = ConformerBlock(
+            dim = dim,
+            dim_head = dim_head,
+            heads = heads,
+            ff_mult = ff_mult,
+            conv_expansion_factor = conv_expansion_factor,
+            conv_kernel_size = conv_kernel_size,
+            conv_causal = conv_causal
+        )  
+        if self.cam:
+            self.key_layer = ConformerBlock(
+                dim = dim,
+                dim_head = dim_head,
+                heads = heads,
+                ff_mult = ff_mult,
+                conv_expansion_factor = conv_expansion_factor,
+                conv_kernel_size = conv_kernel_size,
+                conv_causal = conv_causal
+            )
+
+        self.patch_select = MultiHeadVoting(num_heads=heads, vote_perhead=vote_perhead)
+        self.clr_encoder = CrossLayerRefinement(dim, self.clr_layer)
+        self.count = 0
+
     def forward(self, x):
-
+        B, N, C = x.shape
+        complements = [[] for _ in range(B)]
         for block in self.layers:
-            x = block(x)
-
-        return x
+            x, attn_weight = block(x)
+            select_idx, select_score = self.patch_select(attn_weight, select_num=24)
+            for i in range(B):
+                selected_token = x[i, select_idx[i, :], :]
+                complements[i].extend(selected_token)
+        cls_token = x[:, 0].unsqueeze(1)
+        clr, weights = self.clr_encoder(complements, cls_token)
+        if self.cam:
+            sort_idx, _ = self.patch_select(weights, select_num=24, last=True)
+            out = []
+            for i in range(B):
+                out.append(clr[i, sort_idx[i, :]])
+            out = torch.stack(out).squeeze(1)
+            out = torch.cat((cls_token, out), dim=1)
+            key, _ = self.key_layer(out)
+            return key[:, 0], clr[:, 0]
+        else:
+            return clr[:, 0], None

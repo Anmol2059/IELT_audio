@@ -86,8 +86,8 @@ def train_epoch(train_loader, model, lr,optim, device):
         
         batch_x = batch_x.to(device)
         batch_y = batch_y.view(-1).type(torch.int64).to(device)
-        batch_out, _ = model(batch_x)
-        batch_loss = criterion(batch_out, batch_y)     
+        batch_out, batch_c_out = model(batch_x)
+        batch_loss = 0.6 * criterion(batch_out, batch_y) + 0.4 * criterion(batch_c_out, batch_y)     
         pbar.set_description(f"Epoch {epoch}: cls_loss {batch_loss.item()}")
         optimizer.zero_grad()
         batch_loss.backward()
@@ -156,7 +156,7 @@ if __name__ == '__main__':
 
     ##===================================================Rawboost data augmentation ======================================================================#
 
-    parser.add_argument('--algo', type=int, default=5, 
+    parser.add_argument('--algo', type=int, default=3, 
                     help='Rawboost algos discriptions. 0: No augmentation 1: LnL_convolutive_noise, 2: ISD_additive_noise, 3: SSI_additive_noise, 4: series algo (1+2+3), \
                           5: series algo (1+2), 6: series algo (1+3), 7: series algo(2+3), 8: parallel algo(1,2) .[default=0]')
 
@@ -222,7 +222,7 @@ if __name__ == '__main__':
     prefix_2021 = 'ASVspoof2021.{}'.format(track)
     
     #define model saving path
-    model_tag = 'Conformer_w_HeadTokenAttn_AddClsAvgTemp_{}_{}_{}_ES{}_H{}_NE{}_KS{}_w_sin_pos'.format(
+    model_tag = 'Conformer_w_IELT_w_HeadTokenAttn_AddClsAvgTemp_{}_{}_{}_ES{}_H{}_NE{}_KS{}_w_sin_pos_Aug3'.format(
         track, args.loss, args.lr,args.emb_size, args.heads, args.num_encoders, args.kernel_size)
     if args.comment:
         model_tag = model_tag + '_{}'.format(args.comment)

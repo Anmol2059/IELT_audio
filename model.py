@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import fairseq
-from conformer import ConformerBlock
+from conformer import IELTEncoder
 from torch.nn.modules.transformer import _get_clones
 from torch import Tensor
 
@@ -21,27 +21,29 @@ class MyConformer(nn.Module):
     self.kernel_size=kernel_size
     self.n_encoders=n_encoders
     self.positional_emb = nn.Parameter(sinusoidal_embedding(10000, emb_size), requires_grad=False)
-    self.encoder_blocks=_get_clones( ConformerBlock( dim = emb_size, dim_head=self.dim_head, heads= heads, 
-    ff_mult = ffmult, conv_expansion_factor = exp_fac, conv_kernel_size = kernel_size),
-    n_encoders)
+    self.encoder= IELTEncoder(depth=n_encoders, dim = emb_size, dim_head=self.dim_head, heads= heads, 
+                              ff_mult = ffmult, conv_expansion_factor = exp_fac, 
+                              conv_kernel_size = kernel_size)
     self.class_token = nn.Parameter(torch.rand(1, emb_size))
     self.fc5 = nn.Linear(emb_size, 2)
+    self.softmax = nn.Softmax(dim=-1)
 
-  def forward(self, x, device): # x shape [bs, tiempo, frecuencia]
+  def forward(self, x): # x shape [bs, tiempo, frecuencia]
     x = x + self.positional_emb[:, :x.size(1), :]
     x = torch.stack([torch.vstack((self.class_token, x[i])) for i in range(len(x))])#[bs,1+tiempo,emb_size]
-    list_attn_weight = []
-    for layer in self.encoder_blocks:
-            x, attn_weight = layer(x) #[bs,1+tiempo,emb_size]
-            list_attn_weight.append(attn_weight)
-    embedding=x[:,0,:] #[bs, emb_size]
-    out=self.fc5(embedding) #[bs,2]
-    return out, list_attn_weight
+    embedding, c_embedding = self.encoder(x) #[bs,1+tiempo,emb_size]
+    
+    c_out=self.fc5(c_embedding) #[bs,2]
+    probability = self.softmax(c_out)
+    weight = self.fc5.weight
+    assist_logit = probability * (weight.sum(-1))
+    part_logits = self.fc5(embedding) + assist_logit
+    return part_logits, assist_logit
 
 class SSLModel(nn.Module): #W2V
     def __init__(self,device):
         super(SSLModel, self).__init__()
-        cp_path = 'xlsr2_300m.pt'   # Change the pre-trained XLSR model path. 
+        cp_path = 'pretrained_models/xlsr2_300m.pt'   # Change the pre-trained XLSR model path. 
         model, cfg, task = fairseq.checkpoint_utils.load_model_ensemble_and_task([cp_path])
         self.model = model[0]
         self.device=device
@@ -87,8 +89,8 @@ class Model(nn.Module):
         x = self.first_bn(x)
         x = self.selu(x)
         x = x.squeeze(dim=1)
-        out, attn_score =self.conformer(x,self.device)
-        return out, attn_score
+        out, out_c = self.conformer(x)
+        return out, out_c
 
 class Model2(nn.Module): #Variable len
     def __init__(self, args, device):
