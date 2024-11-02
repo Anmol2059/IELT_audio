@@ -271,14 +271,12 @@ class CrossLayerRefinement(nn.Module):
         def __init__(self, hidden_size, clr_layer):
                 super(CrossLayerRefinement, self).__init__()
                 self.clr_layer = clr_layer
-                self.clr_norm = nn.LayerNorm(hidden_size, eps=1e-6)
 
         def forward(self, x, cls):
                 out = [torch.stack(token) for token in x]
                 out = torch.stack(out).squeeze(1)
                 out = torch.cat((cls, out), dim=1)
                 out, weights = self.clr_layer(out)
-                out = self.clr_norm(out)
                 return out, weights
 
 # Conformer Block
@@ -384,14 +382,14 @@ class IELTEncoder(nn.Module):
         complements = [[] for _ in range(B)]
         for block in self.layers:
             x, attn_weight = block(x)
-            select_idx, select_score = self.patch_select(attn_weight, select_num=24)
+            select_idx, select_score = self.patch_select(attn_weight, select_num=16)
             for i in range(B):
                 selected_token = x[i, select_idx[i, :], :]
                 complements[i].extend(selected_token)
         cls_token = x[:, 0].unsqueeze(1)
         clr, weights = self.clr_encoder(complements, cls_token)
         if self.cam:
-            sort_idx, _ = self.patch_select(weights, select_num=24, last=True)
+            sort_idx, _ = self.patch_select(weights, select_num=16, last=True)
             out = []
             for i in range(B):
                 out.append(clr[i, sort_idx[i, :]])

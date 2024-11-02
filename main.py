@@ -87,7 +87,7 @@ def train_epoch(train_loader, model, lr,optim, device):
         batch_x = batch_x.to(device)
         batch_y = batch_y.view(-1).type(torch.int64).to(device)
         batch_out, batch_c_out = model(batch_x)
-        batch_loss = 0.6 * criterion(batch_out, batch_y) + 0.4 * criterion(batch_c_out, batch_y)     
+        batch_loss = 0.8 * criterion(batch_out, batch_y) + 0.2 * criterion(batch_c_out, batch_y)     
         pbar.set_description(f"Epoch {epoch}: cls_loss {batch_loss.item()}")
         optimizer.zero_grad()
         batch_loss.backward()
@@ -222,7 +222,7 @@ if __name__ == '__main__':
     prefix_2021 = 'ASVspoof2021.{}'.format(track)
     
     #define model saving path
-    model_tag = 'Conformer_w_IELT_w_HeadTokenAttn_AddClsAvgTemp_{}_{}_{}_ES{}_H{}_NE{}_KS{}_w_sin_pos_Aug3'.format(
+    model_tag = 'Conformer_w_IELTs16w0802_w_HeadTokenAttn_AddClsAvgTemp_{}_{}_{}_ES{}_H{}_NE{}_KS{}_w_sin_pos_Aug3'.format(
         track, args.loss, args.lr,args.emb_size, args.heads, args.num_encoders, args.kernel_size)
     if args.comment:
         model_tag = model_tag + '_{}'.format(args.comment)
