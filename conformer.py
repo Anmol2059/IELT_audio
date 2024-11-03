@@ -175,7 +175,7 @@ class Attention(nn.Module):
 
         x = self.proj_drop(x)
 
-        return x, attn[:, :, :N, :N]
+        return x, x_, attn[:, :, :N, :N]
 
 
 class FeedForward(nn.Module):
@@ -276,7 +276,7 @@ class CrossLayerRefinement(nn.Module):
                 out = [torch.stack(token) for token in x]
                 out = torch.stack(out).squeeze(1)
                 out = torch.cat((cls, out), dim=1)
-                out, weights = self.clr_layer(out)
+                out, _, weights = self.clr_layer(out)
                 return out, weights
 
 # Conformer Block
@@ -310,12 +310,12 @@ class ConformerBlock(nn.Module):
 
     def forward(self, x, mask = None):
         x = self.ff1(x) + x
-        attn_x, attn_weight = self.attn(x, mask = mask)
+        attn_x, channel_x, attn_weight = self.attn(x, mask = mask)
         x = attn_x + x
         x = self.conv(x) + x
         x = self.ff2(x) + x
         x = self.post_norm(x)
-        return x, attn_weight
+        return x, channel_x, attn_weight
 
 # Conformer
 
@@ -381,10 +381,11 @@ class IELTEncoder(nn.Module):
         B, N, C = x.shape
         complements = [[] for _ in range(B)]
         for block in self.layers:
-            x, attn_weight = block(x)
+            x, channel_x, attn_weight = block(x)
             select_idx, select_score = self.patch_select(attn_weight, select_num=16)
             for i in range(B):
                 selected_token = x[i, select_idx[i, :], :]
+                selected_token = torch.cat([selected_token, channel_x[i]], dim=0)
                 complements[i].extend(selected_token)
         cls_token = x[:, 0].unsqueeze(1)
         clr, weights = self.clr_encoder(complements, cls_token)
@@ -395,7 +396,7 @@ class IELTEncoder(nn.Module):
                 out.append(clr[i, sort_idx[i, :]])
             out = torch.stack(out).squeeze(1)
             out = torch.cat((cls_token, out), dim=1)
-            key, _ = self.key_layer(out)
+            key, _, _ = self.key_layer(out)
             return key[:, 0], clr[:, 0]
         else:
             return clr[:, 0], None
