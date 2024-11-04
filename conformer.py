@@ -362,6 +362,7 @@ class IELTEncoder(nn.Module):
             conv_kernel_size = conv_kernel_size,
             conv_causal = conv_causal
         )  
+        """
         if self.cam:
             self.key_layer = ConformerBlock(
                 dim = dim,
@@ -372,6 +373,7 @@ class IELTEncoder(nn.Module):
                 conv_kernel_size = conv_kernel_size,
                 conv_causal = conv_causal
             )
+        """
 
         self.patch_select = MultiHeadVoting(num_heads=heads, vote_perhead=vote_perhead)
         self.clr_encoder = CrossLayerRefinement(dim, self.clr_layer)
@@ -390,6 +392,7 @@ class IELTEncoder(nn.Module):
         cls_token = x[:, 0].unsqueeze(1)
         clr, weights = self.clr_encoder(complements, cls_token)
         if self.cam:
+            """
             sort_idx, _ = self.patch_select(weights, select_num=16, last=True)
             out = []
             for i in range(B):
@@ -398,5 +401,7 @@ class IELTEncoder(nn.Module):
             out = torch.cat((cls_token, out), dim=1)
             key, _, _ = self.key_layer(out)
             return key[:, 0], clr[:, 0]
+            """
+            return cls_token.squeeze(1), clr[:, 0]
         else:
             return clr[:, 0], None

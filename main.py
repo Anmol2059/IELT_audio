@@ -222,7 +222,7 @@ if __name__ == '__main__':
     prefix_2021 = 'ASVspoof2021.{}'.format(track)
     
     #define model saving path
-    model_tag = 'Conformer_w_IELTs16wHTw0802_w_HeadTokenAttn_AddClsAvgTemp_{}_{}_{}_ES{}_H{}_NE{}_KS{}_w_sin_pos_Aug3'.format(
+    model_tag = 'Conformer_w_IELTs16wHTinCFMasAssw0802_w_HeadTokenAttn_AddClsAvgTemp_{}_{}_{}_ES{}_H{}_NE{}_KS{}_w_sin_pos_Aug3'.format(
         track, args.loss, args.lr,args.emb_size, args.heads, args.num_encoders, args.kernel_size)
     if args.comment:
         model_tag = model_tag + '_{}'.format(args.comment)
