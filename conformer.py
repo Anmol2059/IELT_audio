@@ -402,6 +402,6 @@ class IELTEncoder(nn.Module):
             key, _, _ = self.key_layer(out)
             return key[:, 0], clr[:, 0]
             """
-            return cls_token.squeeze(1), clr[:, 0]
+            return clr[:, 0], cls_token.squeeze(1)
         else:
             return clr[:, 0], None
