@@ -4,6 +4,12 @@ import fairseq
 from conformer import IELTEncoder
 from torch.nn.modules.transformer import _get_clones
 from torch import Tensor
+import os
+import sys
+
+fairseq_dir = "/home/stud_binit/emotion/fairseq_dir"  
+
+sys.path.append(fairseq_dir)
 
 def sinusoidal_embedding(n_channels, dim):
     pe = torch.FloatTensor([[p / (10000 ** (2 * (i // 2) / dim)) for i in range(dim)]
@@ -25,7 +31,7 @@ class MyConformer(nn.Module):
                               ff_mult = ffmult, conv_expansion_factor = exp_fac, 
                               conv_kernel_size = kernel_size)
     self.class_token = nn.Parameter(torch.rand(1, emb_size))
-    self.fc5 = nn.Linear(emb_size, 2)
+    self.fc5 = nn.Linear(emb_size,8)
     self.softmax = nn.Softmax(dim=-1)
 
   def forward(self, x): # x shape [bs, tiempo, frecuencia]
@@ -43,7 +49,7 @@ class MyConformer(nn.Module):
 class SSLModel(nn.Module): #W2V
     def __init__(self,device):
         super(SSLModel, self).__init__()
-        cp_path = 'pretrained_models/xlsr2_300m.pt'   # Change the pre-trained XLSR model path. 
+        cp_path = '/home/stud_binit/emotion/xlsr2_300m.pt'   # Change the pre-trained XLSR model path. 
         model, cfg, task = fairseq.checkpoint_utils.load_model_ensemble_and_task([cp_path])
         self.model = model[0]
         self.device=device

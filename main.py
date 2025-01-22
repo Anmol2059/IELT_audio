@@ -4,97 +4,194 @@ import os
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from data_utils import Dataset_train, Dataset_eval
+from data_utils import Dataset_train, Dataset_eval, EmotionDataset
 from model import Model
 from utils import reproducibility
 from utils import read_metadata
+from sklearn.metrics import f1_score
 import numpy as np
 from tqdm import tqdm
+from torch.utils.tensorboard import SummaryWriter
 
-def evaluate_accuracy(dev_loader, model, device):
+def evaluate_accuracy(dev_loader, model, device, writer, epoch):
+    model.eval()
     val_loss = 0.0
     num_total = 0.0
-    correct=0
-    model.eval()
-    weight = torch.FloatTensor([0.1, 0.9]).to(device)
-    criterion = nn.CrossEntropyLoss(weight=weight)
-    num_batch = len(dev_loader)
-    i=0
+    criterion = nn.BCEWithLogitsLoss()
+    
+    all_preds = []
+    all_targets = []
+    
     with torch.no_grad():
-      for batch_x, batch_y in dev_loader:
-        batch_size = batch_x.size(0)
-        target = torch.LongTensor(batch_y).to(device)
-        num_total += batch_size
-        batch_x = batch_x.to(device)
-        batch_y = batch_y.view(-1).type(torch.int64).to(device)
-        batch_out, _ = model(batch_x)
-        pred = batch_out.max(1)[1] 
-        correct += pred.eq(target).sum().item()
-        
-        batch_loss = criterion(batch_out, batch_y)
-        val_loss += (batch_loss.item() * batch_size)
-        i=i+1
+        for batch_x, batch_y in dev_loader:
+            batch_size = batch_x.size(0)
+            num_total += batch_size
+            
+            batch_x = batch_x.to(device)
+            batch_y = batch_y.to(device)
+            
+            batch_out, _ = model(batch_x)
+            batch_loss = criterion(batch_out, batch_y)
+            val_loss += (batch_loss.item() * batch_size)
+            
+            preds = torch.sigmoid(batch_out).cpu().numpy() > 0.5
+            all_preds.append(preds)
+            all_targets.append(batch_y.cpu().numpy())
+    
     val_loss /= num_total
-    test_accuracy = 100. * correct / len(dev_loader.dataset)
-    print('\n{} - {} - {} '.format(epoch, str(test_accuracy)+'%', val_loss))
+    all_preds = np.vstack(all_preds)
+    all_targets = np.vstack(all_targets)
+    
+    f1_macro = f1_score(all_targets, all_preds, average='macro')
+    f1_micro = f1_score(all_targets, all_preds, average='micro')
+    accuracy = (all_preds == all_targets).mean()
+    
+    writer.add_scalar('Loss/val', val_loss, epoch)
+    writer.add_scalar('Accuracy/val', accuracy, epoch)
+    writer.add_scalar('F1/macro', f1_macro, epoch)
+    writer.add_scalar('F1/micro', f1_micro, epoch)
+    
+    print(f'\nEpoch {epoch} - Acc: {accuracy:.2%} - F1 macro: {f1_macro:.4f} - F1 micro: {f1_micro:.4f} - Val Loss: {val_loss:.4f}')
     return val_loss
 
-
-def produce_evaluation_file(dataset, model, device, save_path):
-    data_loader = DataLoader(dataset, batch_size=10, shuffle=False, drop_last=False)
-    model.eval()
-    fname_list = []
-    score_list = []
-    text_list = []
-
-    for batch_x,utt_id in data_loader:
-        batch_x = batch_x.to(device)
-        batch_out, _ = model(batch_x)
-        batch_score = (batch_out[:, 1]
-                       ).data.cpu().numpy().ravel()
-        # add outputs
-        fname_list.extend(utt_id)
-        score_list.extend(batch_score.tolist())
-
-    for f, cm in zip(fname_list, score_list):
-        text_list.append('{} {}'.format(f, cm))
-    del fname_list
-    del score_list
-    with open(save_path, 'a+') as fh:
-        for i in range(0, len(text_list), 500):
-            batch = text_list[i:i+500]
-            fh.write('\n'.join(batch) + '\n')
-    del text_list
-    fh.close()
-    print('Scores saved to {}'.format(save_path))
-
-def train_epoch(train_loader, model, lr,optim, device):
-    num_total = 0.0
+def train_epoch(train_loader, model, lr, optimizer, device, writer, epoch):
     model.train()
-
-    #set objective (Loss) functions
-    weight = torch.FloatTensor([0.1, 0.9]).to(device)
-    criterion = nn.CrossEntropyLoss(weight=weight)
-    num_batch = len(train_loader)
-    i=0
+    num_total = 0.0
+    total_loss = 0.0
+    criterion = nn.BCEWithLogitsLoss()
+    
     pbar = tqdm(train_loader)
     for i, batch in enumerate(pbar):
         batch_x, batch_y = batch
-
         batch_size = batch_x.size(0)
         num_total += batch_size
         
         batch_x = batch_x.to(device)
-        batch_y = batch_y.view(-1).type(torch.int64).to(device)
+        batch_y = batch_y.to(device)
+        
         batch_out, batch_c_out = model(batch_x)
-        batch_loss = 1.0 * criterion(batch_out, batch_y) #+ 0.2 * criterion(batch_c_out, batch_y)     
-        pbar.set_description(f"Epoch {epoch}: cls_loss {batch_loss.item()}")
+        batch_loss = criterion(batch_out, batch_y)
+        total_loss += batch_loss.item() * batch_size
+        
+        pbar.set_description(f"Train Loss: {batch_loss.item():.4f}")
+        
         optimizer.zero_grad()
         batch_loss.backward()
         optimizer.step()
-        i=i+1
-    sys.stdout.flush()
+    
+    avg_loss = total_loss / num_total
+    writer.add_scalar('Loss/train', avg_loss, epoch)
+#     sys.stdout.flush()
+# def evaluate_accuracy(dev_loader, model, device):
+#     val_loss = 0.0
+#     num_total = 0.0
+#     correct=0
+#     model.eval()
+#     weight = torch.FloatTensor([0.1, 0.9]).to(device)
+#     criterion = nn.CrossEntropyLoss(weight=weight)
+#     num_batch = len(dev_loader)
+#     i=0
+#     with torch.no_grad():
+#       for batch_x, batch_y in dev_loader:
+#         batch_size = batch_x.size(0)
+#         target = torch.LongTensor(batch_y).to(device)
+#         num_total += batch_size
+#         batch_x = batch_x.to(device)
+#         batch_y = batch_y.view(-1).type(torch.int64).to(device)
+#         batch_out, _ = model(batch_x)
+#         pred = batch_out.max(1)[1] 
+#         correct += pred.eq(target).sum().item()
+        
+#         batch_loss = criterion(batch_out, batch_y)
+#         val_loss += (batch_loss.item() * batch_size)
+#         i=i+1
+#     val_loss /= num_total
+#     test_accuracy = 100. * correct / len(dev_loader.dataset)
+#     print('\n{} - {} - {} '.format(epoch, str(test_accuracy)+'%', val_loss))
+#     return val_loss
+
+
+# def produce_evaluation_file(dataset, model, device, save_path):
+#     data_loader = DataLoader(dataset, batch_size=10, shuffle=False, drop_last=False)
+#     model.eval()
+#     fname_list = []
+#     score_list = []
+#     text_list = []
+
+#     for batch_x,utt_id in data_loader:
+#         batch_x = batch_x.to(device)
+#         batch_out, _ = model(batch_x)
+#         batch_score = (batch_out[:, 1]
+#                        ).data.cpu().numpy().ravel()
+#         # add outputs
+#         fname_list.extend(utt_id)
+#         score_list.extend(batch_score.tolist())
+
+#     for f, cm in zip(fname_list, score_list):
+#         text_list.append('{} {}'.format(f, cm))
+#     del fname_list
+#     del score_list
+#     with open(save_path, 'a+') as fh:
+#         for i in range(0, len(text_list), 500):
+#             batch = text_list[i:i+500]
+#             fh.write('\n'.join(batch) + '\n')
+#     del text_list
+#     fh.close()
+#     print('Scores saved to {}'.format(save_path))
+
+# # def train_epoch(train_loader, model, lr,optim, device):
+# #     num_total = 0.0
+# #     model.train()
+
+# #     #set objective (Loss) functions
+# #     weight = torch.FloatTensor([0.1, 0.9]).to(device)
+# #     criterion = nn.CrossEntropyLoss(weight=weight)
+# #     num_batch = len(train_loader)
+# #     i=0
+# #     pbar = tqdm(train_loader)
+# #     for i, batch in enumerate(pbar):
+# #         batch_x, batch_y = batch
+
+# #         batch_size = batch_x.size(0)
+# #         num_total += batch_size
+        
+# #         batch_x = batch_x.to(device)
+# #         batch_y = batch_y.view(-1).type(torch.int64).to(device)
+# #         batch_out, batch_c_out = model(batch_x)
+# #         batch_loss = 1.0 * criterion(batch_out, batch_y) #+ 0.2 * criterion(batch_c_out, batch_y)     
+# #         pbar.set_description(f"Epoch {epoch}: cls_loss {batch_loss.item()}")
+# #         optimizer.zero_grad()
+# #         batch_loss.backward()
+# #         optimizer.step()
+# #         i=i+1
+# #     sys.stdout.flush()
        
+# def train_epoch(train_loader, model, lr, optimizer, device):
+#     model.train()
+#     num_total = 0.0
+    
+#     # Use BCEWithLogitsLoss for multi-label classification
+#     criterion = nn.BCEWithLogitsLoss()
+    
+#     pbar = tqdm(train_loader)
+#     for i, batch in enumerate(pbar):
+#         batch_x, batch_y = batch
+#         batch_size = batch_x.size(0)
+#         num_total += batch_size
+        
+#         batch_x = batch_x.to(device)
+#         batch_y = batch_y.to(device)  # Keep as float tensor
+        
+#         batch_out, batch_c_out = model(batch_x)
+#         batch_loss = criterion(batch_out, batch_y)
+        
+#         pbar.set_description(f"Train Loss: {batch_loss.item():.4f}")
+        
+#         optimizer.zero_grad()
+#         batch_loss.backward()
+#         optimizer.step()
+
+#     sys.stdout.flush()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Conformer-W2V')
@@ -119,8 +216,8 @@ if __name__ == '__main__':
     '''
 
     # Hyperparameters
-    parser.add_argument('--batch_size', type=int, default=20)
-    parser.add_argument('--num_epochs', type=int, default=7)
+    parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--num_epochs', type=int, default=200)
     parser.add_argument('--lr', type=float, default=0.000001)
     parser.add_argument('--weight_decay', type=float, default=0.0001)
     parser.add_argument('--loss', type=str, default='WCE')
@@ -156,7 +253,7 @@ if __name__ == '__main__':
 
     ##===================================================Rawboost data augmentation ======================================================================#
 
-    parser.add_argument('--algo', type=int, default=3, 
+    parser.add_argument('--algo', type=int, default=5, 
                     help='Rawboost algos discriptions. 0: No augmentation 1: LnL_convolutive_noise, 2: ISD_additive_noise, 3: SSI_additive_noise, 4: series algo (1+2+3), \
                           5: series algo (1+2), 6: series algo (1+3), 7: series algo(2+3), 8: parallel algo(1,2) .[default=0]')
 
@@ -199,150 +296,255 @@ if __name__ == '__main__':
                     help='Maximum SNR value for coloured additive noise.[defaul=40]')
     
     ##===================================================Rawboost data augmentation ======================================================================#
-    
-
     if not os.path.exists('models'):
         os.mkdir('models')
     args = parser.parse_args()
-    print(args)
-    args.track='LA'
- 
-    #make experiment reproducible
-    reproducibility(args.seed, args)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print('Device:', device)
     
-    track = args.track
-    n_mejores=args.n_mejores_loss
-
-    assert track in ['LA','DF'], 'Invalid track given'
-    assert args.n_average_model<args.n_mejores_loss+1, 'average models must be smaller or equal to number of saved epochs'
-
-    #database
-    prefix      = 'ASVspoof_{}'.format(track)
-    prefix_2019 = 'ASVspoof2019.{}'.format(track)
-    prefix_2021 = 'ASVspoof2021.{}'.format(track)
-    
-    #define model saving path
-    model_tag = 'Conformer_w_IELTs16wHTinCFMasPred_w_HeadTokenAttn_AddClsAvgTemp_{}_{}_{}_ES{}_H{}_NE{}_KS{}_w_sin_pos_Aug3'.format(
-        track, args.loss, args.lr,args.emb_size, args.heads, args.num_encoders, args.kernel_size)
+    # Define model saving path
+    model_tag = f'EmotionRecognition_lr{args.lr}_emb{args.emb_size}_h{args.heads}_ne{args.num_encoders}_ks{args.kernel_size}'
     if args.comment:
-        model_tag = model_tag + '_{}'.format(args.comment)
+        model_tag += f'_{args.comment}'
     model_save_path = os.path.join('models', model_tag)
-    
-    print('Model tag: '+ model_tag)
+    print('Model tag:', model_tag)
 
-    #set model save directory
-    if not os.path.exists(model_save_path):
-        os.mkdir(model_save_path)
+    # Initialize TensorBoard writer
+    
+    # Create save directories
+    os.makedirs(model_save_path, exist_ok=True)
     best_save_path = os.path.join(model_save_path, 'best')
-    if not os.path.exists(best_save_path):
-        os.mkdir(best_save_path)
-    
-    #GPU device
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'                  
-    print('Device: {}'.format(device))
-    
-    model = Model(args,device)
+    os.makedirs(best_save_path, exist_ok=True)
+
+    writer = SummaryWriter(log_dir=os.path.join(model_save_path, 'runs'))
+    csv_path = '/home/stud_binit/emotion/MSP-Podcast_Challenge_IS2025/processed_labels.csv'
+    audio_path = '/home/stud_binit/emotion/Audios'
+    # Initialize model
+    model = Model(args, device)
     if not args.FT_W2V:
         for param in model.ssl_model.parameters():
             param.requires_grad = False
-    nb_params = sum([param.view(-1).size()[0] for param in model.parameters() if param.requires_grad])
-    model =model.to(device)
-    print('nb_params:',nb_params)
+    model = model.to(device)
+    print('nb_params:', sum(p.numel() for p in model.parameters() if p.requires_grad))
 
-    #set Adam optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,weight_decay=args.weight_decay)
+    # Optimizer
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    
+    # Data loaders
+    train_set = EmotionDataset(
+        args=args,
+        csv_path=csv_path,
+        base_dir=audio_path,
+        algo=args.algo,
+        split_set='Train'
+    )
+    train_loader = DataLoader(
+        train_set, 
+        batch_size=args.batch_size,
+        num_workers=10,
+        shuffle=True,
+        drop_last=True
+    )
+    
+    dev_set = EmotionDataset(
+        args=args,
+        csv_path=csv_path,
+        base_dir=audio_path,
+        algo=args.algo,
+        split_set='Development'
+    )
+    dev_loader = DataLoader(
+        dev_set,
+        batch_size=16,
+        num_workers=10,
+        shuffle=False
+    )
+    
+    # Training loop
+    not_improving = 0
+    epoch = 0
+    n_mejores = args.n_mejores_loss
+    bests = np.ones(n_mejores, dtype=float) * float('inf')
+    best_loss = float('inf')
+    
+    if args.train:
+        for i in range(n_mejores):
+            np.savetxt(os.path.join(best_save_path, f'best_{i}.pth'), np.array((0,0)))
+            
+        while not_improving < args.num_epochs:
+            print(f'######## Epoch {epoch} ########')
+            train_epoch(train_loader, model, args.lr, optimizer, device, writer, epoch)
+            val_loss = evaluate_accuracy(dev_loader, model, device, writer, epoch)
+            
+            if val_loss < best_loss:
+                best_loss = val_loss
+                torch.save(model.state_dict(), os.path.join(model_save_path, 'best.pth'))
+                print('New best epoch')
+                not_improving = 0
+            else:
+                not_improving += 1
+                
+            # Save n-best models
+            for i in range(n_mejores):
+                if bests[i] > val_loss:
+                    for t in range(n_mejores-1, i, -1):
+                        bests[t] = bests[t-1]
+                        os.system(f'mv {best_save_path}/best_{t-1}.pth {best_save_path}/best_{t}.pth')
+                    bests[i] = val_loss
+                    torch.save(model.state_dict(), os.path.join(best_save_path, f'best_{i}.pth'))
+                    break
+                    
+            print(f'\n{epoch} - {val_loss}')
+            print('n-best loss:', bests)
+            
+            epoch += 1
+            if epoch > 74:
+                break
+                
+        print('Total epochs:', epoch)
+
+    # if not os.path.exists('models'):
+    #     os.mkdir('models')
+    # args = parser.parse_args()
+    # print(args)
+    # args.track='LA'
+ 
+    # #make experiment reproducible
+    # reproducibility(args.seed, args)
+    
+    # track = args.track
+    # n_mejores=args.n_mejores_loss
+
+    # assert track in ['LA','DF'], 'Invalid track given'
+    # assert args.n_average_model<args.n_mejores_loss+1, 'average models must be smaller or equal to number of saved epochs'
+
+    # #database
+    # prefix      = 'ASVspoof_{}'.format(track)
+    # prefix_2019 = 'ASVspoof2019.{}'.format(track)
+    # prefix_2021 = 'ASVspoof2021.{}'.format(track)
+    
+    # #define model saving path
+    # model_tag = 'Conformer_w_IELTs16wHTinCFMasPred_w_HeadTokenAttn_AddClsAvgTemp_{}_{}_{}_ES{}_H{}_NE{}_KS{}_w_sin_pos_Aug3'.format(
+    #     track, args.loss, args.lr,args.emb_size, args.heads, args.num_encoders, args.kernel_size)
+    # if args.comment:
+    #     model_tag = model_tag + '_{}'.format(args.comment)
+    # model_save_path = os.path.join('models', model_tag)
+    
+    # print('Model tag: '+ model_tag)
+
+    # #set model save directory
+    # if not os.path.exists(model_save_path):
+    #     os.mkdir(model_save_path)
+    # best_save_path = os.path.join(model_save_path, 'best')
+    # if not os.path.exists(best_save_path):
+    #     os.mkdir(best_save_path)
+    
+    # #GPU device
+    # device = 'cuda' if torch.cuda.is_available() else 'cpu'                  
+    # print('Device: {}'.format(device))
+    
+    # model = Model(args,device)
+    # if not args.FT_W2V:
+    #     for param in model.ssl_model.parameters():
+    #         param.requires_grad = False
+    # nb_params = sum([param.view(-1).size()[0] for param in model.parameters() if param.requires_grad])
+    # model =model.to(device)
+    # print('nb_params:',nb_params)
+
+    # #set Adam optimizer
+    # optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,weight_decay=args.weight_decay)
      
-    # define train dataloader
-    label_trn, files_id_train = read_metadata( dir_meta =  os.path.join(args.protocols_path+'LA/{}_cm_protocols/{}.cm.train.trn.txt'.format(prefix,prefix_2019)), is_eval=False)
-    print('no. of training trials',len(files_id_train))
+    # # define train dataloader
+    # label_trn, files_id_train = read_metadata( dir_meta =  os.path.join(args.protocols_path+'LA/{}_cm_protocols/{}.cm.train.trn.txt'.format(prefix,prefix_2019)), is_eval=False)
+    # print('no. of training trials',len(files_id_train))
     
-    train_set=Dataset_train(args,list_IDs = files_id_train,labels = label_trn,base_dir = os.path.join(args.database_path+'LA/{}_{}_train/'.format(prefix_2019.split('.')[0],args.track)),algo=args.algo)
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, num_workers = 10, shuffle=True,drop_last = True)
+    # train_set=Dataset_train(args,list_IDs = files_id_train,labels = label_trn,base_dir = os.path.join(args.database_path+'LA/{}_{}_train/'.format(prefix_2019.split('.')[0],args.track)),algo=args.algo)
+    # train_loader = DataLoader(train_set, batch_size=args.batch_size, num_workers = 10, shuffle=True,drop_last = True)
     
-    del train_set, label_trn
+    # del train_set, label_trn
     
-    # define validation dataloader
-    labels_dev, files_id_dev = read_metadata( dir_meta =  os.path.join(args.protocols_path+'LA/{}_cm_protocols/{}.cm.dev.trl.txt'.format(prefix,prefix_2019)), is_eval=False)
-    print('no. of validation trials',len(files_id_dev))
+    # # define validation dataloader
+    # labels_dev, files_id_dev = read_metadata( dir_meta =  os.path.join(args.protocols_path+'LA/{}_cm_protocols/{}.cm.dev.trl.txt'.format(prefix,prefix_2019)), is_eval=False)
+    # print('no. of validation trials',len(files_id_dev))
 
-    dev_set = Dataset_train(args,list_IDs = files_id_dev,
-		    labels = labels_dev,
-		    base_dir = os.path.join(args.database_path+'LA/{}_{}_dev/'.format(prefix_2019.split('.')[0],args.track)), algo=args.algo)
+    # dev_set = Dataset_train(args,list_IDs = files_id_dev,
+	# 	    labels = labels_dev,
+	# 	    base_dir = os.path.join(args.database_path+'LA/{}_{}_dev/'.format(prefix_2019.split('.')[0],args.track)), algo=args.algo)
 
-    dev_loader = DataLoader(dev_set, batch_size=8, num_workers=10, shuffle=False)
-    del dev_set,labels_dev
+    # dev_loader = DataLoader(dev_set, batch_size=8, num_workers=10, shuffle=False)
+    # del dev_set,labels_dev
 
     
     ##################### Training and validation #####################
-    num_epochs = args.num_epochs
-    not_improving=0
-    epoch=0
-    bests=np.ones(n_mejores,dtype=float)*float('inf')
-    best_loss=float('inf')
-    if args.train:
-        for i in range(n_mejores):
-            np.savetxt( os.path.join(best_save_path, 'best_{}.pth'.format(i)), np.array((0,0)))
-        while not_improving<args.num_epochs:
-            print('######## Epoca {} ########'.format(epoch))
-            train_epoch(train_loader, model, args.lr, optimizer, device)
-            val_loss = evaluate_accuracy(dev_loader, model, device)
-            if val_loss<best_loss:
-                best_loss=val_loss
-                torch.save(model.state_dict(), os.path.join(model_save_path, 'best.pth'))
-                print('New best epoch')
-                not_improving=0
-            else:
-                not_improving+=1
-            for i in range(n_mejores):
-                if bests[i]>val_loss:
-                    for t in range(n_mejores-1,i,-1):
-                        bests[t]=bests[t-1]
-                        os.system('mv {}/best_{}.pth {}/best_{}.pth'.format(best_save_path, t-1, best_save_path, t))
-                    bests[i]=val_loss
-                    torch.save(model.state_dict(), os.path.join(best_save_path, 'best_{}.pth'.format(i)))
-                    break
-            print('\n{} - {}'.format(epoch, val_loss))
-            print('n-best loss:', bests)
-            #torch.save(model.state_dict(), os.path.join(model_save_path, 'epoch_{}.pth'.format(epoch)))
-            epoch+=1
-            if epoch>74:
-                break
-        print('Total epochs: ' + str(epoch) +'\n')
+    # num_epochs = args.num_epochs
+    # not_improving=0
+    # epoch=0
+    # bests=np.ones(n_mejores,dtype=float)*float('inf')
+    # best_loss=float('inf')
+    # if args.train:
+    #     for i in range(n_mejores):
+    #         np.savetxt( os.path.join(best_save_path, 'best_{}.pth'.format(i)), np.array((0,0)))
+    #     while not_improving<args.num_epochs:
+    #         print('######## Epoca {} ########'.format(epoch))
+    #         train_epoch(train_loader, model, args.lr, optimizer, device)
+    #         val_loss = evaluate_accuracy(dev_loader, model, device)
+    #         if val_loss<best_loss:
+    #             best_loss=val_loss
+    #             torch.save(model.state_dict(), os.path.join(model_save_path, 'best.pth'))
+    #             print('New best epoch')
+    #             not_improving=0
+    #         else:
+    #             not_improving+=1
+    #         for i in range(n_mejores):
+    #             if bests[i]>val_loss:
+    #                 for t in range(n_mejores-1,i,-1):
+    #                     bests[t]=bests[t-1]
+    #                     os.system('mv {}/best_{}.pth {}/best_{}.pth'.format(best_save_path, t-1, best_save_path, t))
+    #                 bests[i]=val_loss
+    #                 torch.save(model.state_dict(), os.path.join(best_save_path, 'best_{}.pth'.format(i)))
+    #                 break
+    #         print('\n{} - {}'.format(epoch, val_loss))
+    #         print('n-best loss:', bests)
+    #         #torch.save(model.state_dict(), os.path.join(model_save_path, 'epoch_{}.pth'.format(epoch)))
+    #         epoch+=1
+    #         if epoch>74:
+    #             break
+    #     print('Total epochs: ' + str(epoch) +'\n')
 
 
-    print('######## Eval ########')
-    if args.average_model:
-        sdl=[]
-        model.load_state_dict(torch.load(os.path.join(best_save_path, 'best_{}.pth'.format(0))))
-        print('Model loaded : {}'.format(os.path.join(best_save_path, 'best_{}.pth'.format(0))))
-        sd = model.state_dict()
-        for i in range(1,args.n_average_model):
-            model.load_state_dict(torch.load(os.path.join(best_save_path, 'best_{}.pth'.format(i))))
-            print('Model loaded : {}'.format(os.path.join(best_save_path, 'best_{}.pth'.format(i))))
-            sd2 = model.state_dict()
-            for key in sd:
-                sd[key]=(sd[key]+sd2[key])
-        for key in sd:
-            sd[key]=(sd[key])/args.n_average_model
-        model.load_state_dict(sd)
-        print('Model loaded average of {} best models in {}'.format(args.n_average_model, best_save_path))
-    else:
-        model.load_state_dict(torch.load(os.path.join(model_save_path, 'best.pth')))
-        print('Model loaded : {}'.format(os.path.join(model_save_path, 'best.pth')))
+    # print('######## Eval ########')
+    # if args.average_model:
+    #     sdl=[]
+    #     model.load_state_dict(torch.load(os.path.join(best_save_path, 'best_{}.pth'.format(0))))
+    #     print('Model loaded : {}'.format(os.path.join(best_save_path, 'best_{}.pth'.format(0))))
+    #     sd = model.state_dict()
+    #     for i in range(1,args.n_average_model):
+    #         model.load_state_dict(torch.load(os.path.join(best_save_path, 'best_{}.pth'.format(i))))
+    #         print('Model loaded : {}'.format(os.path.join(best_save_path, 'best_{}.pth'.format(i))))
+    #         sd2 = model.state_dict()
+    #         for key in sd:
+    #             sd[key]=(sd[key]+sd2[key])
+    #     for key in sd:
+    #         sd[key]=(sd[key])/args.n_average_model
+    #     model.load_state_dict(sd)
+    #     print('Model loaded average of {} best models in {}'.format(args.n_average_model, best_save_path))
+    # else:
+    #     model.load_state_dict(torch.load(os.path.join(model_save_path, 'best.pth')))
+    #     print('Model loaded : {}'.format(os.path.join(model_save_path, 'best.pth')))
 
-    eval_tracks=['LA','DF']
-    if args.comment_eval:
-        model_tag = model_tag + '_{}'.format(args.comment_eval)
+    # eval_tracks=['LA','DF']
+    # if args.comment_eval:
+    #     model_tag = model_tag + '_{}'.format(args.comment_eval)
 
-    for tracks in eval_tracks:
-        if not os.path.exists('Scores/{}/{}.txt'.format(tracks, model_tag)):
-            prefix      = 'ASVspoof_{}'.format(tracks)
-            prefix_2019 = 'ASVspoof2019.{}'.format(tracks)
-            prefix_2021 = 'ASVspoof2021.{}'.format(tracks)
+    # for tracks in eval_tracks:
+    #     if not os.path.exists('Scores/{}/{}.txt'.format(tracks, model_tag)):
+    #         prefix      = 'ASVspoof_{}'.format(tracks)
+    #         prefix_2019 = 'ASVspoof2019.{}'.format(tracks)
+    #         prefix_2021 = 'ASVspoof2021.{}'.format(tracks)
 
-            file_eval = read_metadata( dir_meta =  os.path.join(args.protocols_path+'{}/{}_cm_protocols/{}.cm.eval.trl.txt'.format(tracks, prefix,prefix_2021)), is_eval=True)
-            print('no. of eval trials',len(file_eval))
-            eval_set=Dataset_eval(list_IDs = file_eval,base_dir = os.path.join(args.database_path+'{}/ASVspoof2021_{}_eval/'.format(tracks,tracks)),track=tracks)
-            produce_evaluation_file(eval_set, model, device, 'Scores/{}/{}.txt'.format(tracks, model_tag))
-        else:
-            print('Score file already exists')
+    #         file_eval = read_metadata( dir_meta =  os.path.join(args.protocols_path+'{}/{}_cm_protocols/{}.cm.eval.trl.txt'.format(tracks, prefix,prefix_2021)), is_eval=True)
+    #         print('no. of eval trials',len(file_eval))
+    #         eval_set=Dataset_eval(list_IDs = file_eval,base_dir = os.path.join(args.database_path+'{}/ASVspoof2021_{}_eval/'.format(tracks,tracks)),track=tracks)
+    #         produce_evaluation_file(eval_set, model, device, 'Scores/{}/{}.txt'.format(tracks, model_tag))
+    #     else:
+    #         print('Score file already exists')
